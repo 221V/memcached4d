@@ -1,4 +1,5 @@
-﻿module memcached4d;
+﻿
+module memcached4d;
 
 // TODO: 
 //	documentation
@@ -36,7 +37,6 @@ usage
    		writeln("not stored")
 	}
 
-
 */
 
 
@@ -45,13 +45,14 @@ import std.string,
 	std.conv,
 	std.digest.md;
 
-
+static import std.array;
 
 import vibe.core.net,
 	vibe.stream.operations,
 	vibe.data.serialization,
 	vibe.data.json;
 
+import std.traits : isNumeric, isBoolean, isSomeString, Unqual;
 
 
 struct MemcachedServer {
@@ -171,27 +172,23 @@ class MemcachedClient {
 	/**
 	 * convert User data type to a string representation
 	 */
-	protected string serialize(T)(T data) {
-		alias Unqual!T Unqualified;
-		
-		string value;
-		static if (is(Unqualified : string)) {
-			value = data;
-		} else static if(is(Unqualified : int) 
-		                 || is(Unqualified == bool)
-		                 || is(Unqualified == double)
-		                 || is(Unqualified == float)
-		                 || is(Unqualified : long)
-		                 ){
-			value = data.to!string;
-		}
-		else static if( isJsonSerializable!Unqualified ){
-			value = data.toJson;
-		} else  {
-			value = vibe.data.serialization.serialize!JsonSerializer(data).toString;
-		}
-		return value;
-	}
+  protected string serialize(T)(T data) {
+    import std.traits : isNumeric, isBoolean, Unqual;
+    import vibe.data.json : serializeToJsonString;
+    alias Unqual!T Unqualified;
+    
+    static if (is(Unqualified == string)) {
+        return data;
+    }
+    else static if (isNumeric!Unqualified || isBoolean!Unqualified) {
+        return data.to!string;
+    }
+    else {
+        // Use Vibe.d's JSON serialization
+        return serializeToJsonString(data);
+    }
+  }
+
 
 	/**
 	 * store data with key, make it expire after expires secconds
@@ -282,32 +279,45 @@ class MemcachedClient {
 	}
 	alias remove del;
 
-	RETURN_STATE increment(string key, int inc){
-		connect(key);
-		conn.write( format("incr %s %s\r\n", key, inc));
-
-		auto retval = cast(string) conn.readLine();
-		if( retval.isNumeric() ) { return RETURN_STATE.SUCCESS; }
-		else if(retval == "NOT_FOUND") { return RETURN_STATE.NOT_FOUND ; }
-		else if(retval.startsWith("CLIENT_ERROR")) { return RETURN_STATE.ERROR ; }
-		else if(retval == "ERROR" ) { return RETURN_STATE.ERROR ; }
-		else { return RETURN_STATE.ERROR; }
-
-	}
+  RETURN_STATE increment(string key, int inc) {
+    connect(key);
+    conn.write(format("incr %s %s\r\n", key, inc));
+    
+    auto retval = cast(string) conn.readLine();
+    import std.ascii : isDigit;
+    import std.algorithm : all;
+    
+    if (retval.length > 0 && retval[].all!(c => isDigit(c))) {
+        return RETURN_STATE.SUCCESS;
+    }
+    else if(retval == "NOT_FOUND") {
+        return RETURN_STATE.NOT_FOUND;
+    }
+    else {
+        return RETURN_STATE.ERROR;
+    }
+  }
 	alias increment incr;
 	
 	
-	RETURN_STATE decrement(string key, int dec){
-		connect(key);
-		conn.write( format("decr %s %s\r\n", key, dec));
-
-		auto retval = cast(string) conn.readLine();
-		if( retval.isNumeric() ) { return RETURN_STATE.SUCCESS; }
-		else if(retval == "NOT_FOUND") { return RETURN_STATE.NOT_FOUND ; }
-		else if(retval.startsWith("CLIENT_ERROR")) { return RETURN_STATE.ERROR ; }
-		else if(retval == "ERROR" ) { return RETURN_STATE.ERROR ; }
-		else { return RETURN_STATE.SUCCESS; }
-	}
+  RETURN_STATE decrement(string key, int dec) {
+    connect(key);
+    conn.write(format("decr %s %s\r\n", key, dec));
+    
+    auto retval = cast(string) conn.readLine();
+    import std.ascii : isDigit;
+    import std.algorithm : all;
+    
+    if (retval.length > 0 && retval[].all!(c => isDigit(c))) {
+        return RETURN_STATE.SUCCESS;
+    }
+    else if(retval == "NOT_FOUND") {
+        return RETURN_STATE.NOT_FOUND;
+    }
+    else {
+        return RETURN_STATE.ERROR;
+    }
+  }
 	alias decrement decr;
 	
 	
@@ -325,24 +335,21 @@ class MemcachedClient {
 	/**
 	 * convert data stored in memcached to the requested type
 	 */ 
-	protected T deserialize(T)(string data) {
-		alias Unqual!T Unqualified;
-		
-		static if(is(Unqualified: string)){
-			return data;
-		}else static if(is(Unqualified : int) 
-		                || is(Unqualified == bool)
-		                || is(Unqualified == double)
-		                || is(Unqualified == float)
-		                || is(Unqualified : long)
-		                ){
-			
-			return chomp(data).to!T;
-		} else {
-			Json j = parseJsonString( data);
-			return deserializeJson!T(j);
-		}
-	}
+  protected T deserialize(T)(string data) {
+    import std.traits : isNumeric, isBoolean, Unqual;
+    import vibe.data.json : parseJsonString, deserializeJson;
+    alias Unqual!T Unqualified;
+    
+    static if (is(Unqualified == string)) {
+        return data;
+    }
+    else static if (isNumeric!Unqualified || isBoolean!Unqualified) {
+        return chomp(data).to!T;
+    }
+    else {
+        return parseJsonString(data).deserializeJson!T();
+    }
+  }
 
 
 
